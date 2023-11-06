@@ -98,6 +98,7 @@ public class FlutterBluePlusPlugin implements
 
     private final Map<String, BluetoothGatt> mConnectedDevices = new ConcurrentHashMap<>();
     private final Map<String, BluetoothGatt> mCurrentlyConnectingDevices = new ConcurrentHashMap<>();
+    private final Map<String, BluetoothDevice> mBondingDevices = new ConcurrentHashMap<>();
     private final Map<String, Integer> mMtu = new ConcurrentHashMap<>();
     private final Map<String, Boolean> mAutoConnect = new ConcurrentHashMap<>();
     private final Map<String, String> mWriteChr = new ConcurrentHashMap<>();
@@ -565,6 +566,9 @@ public class FlutterBluePlusPlugin implements
                             return;
                         } 
 
+                        // wait if any device is bonding (increases reliability)
+                        waitIfBonding();
+
                         // connect with new gatt
                         BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(remoteId);
                         if (Build.VERSION.SDK_INT >= 23) { // Android 6.0 (October 2015)
@@ -618,6 +622,9 @@ public class FlutterBluePlusPlugin implements
                         // remove
                         mCurrentlyConnectingDevices.remove(remoteId);
 
+                        // cleanup
+                        gatt.close();
+
                         // see: BmConnectionStateResponse
                         HashMap<String, Object> response = new HashMap<>();
                         response.put("remote_id", remoteId);
@@ -642,6 +649,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("discoverServices", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // discover services
                     if(gatt.discoverServices() == false) {
@@ -668,6 +678,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("readCharacteristic", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // find characteristic
                     ChrFound found = locateCharacteristic(gatt, serviceUuid, secondaryServiceUuid, characteristicUuid);
@@ -718,6 +731,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("writeCharacteristic", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // find characteristic
                     ChrFound found = locateCharacteristic(gatt, serviceUuid, secondaryServiceUuid, characteristicUuid);
@@ -807,6 +823,9 @@ public class FlutterBluePlusPlugin implements
                         break;
                     }
 
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
+
                     // find characteristic
                     ChrFound found = locateCharacteristic(gatt, serviceUuid, secondaryServiceUuid, characteristicUuid);
                     if (found.error != null) {
@@ -851,6 +870,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("writeDescriptor", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // find characteristic
                     ChrFound found = locateCharacteristic(gatt, serviceUuid, secondaryServiceUuid, characteristicUuid);
@@ -927,6 +949,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("setNotifyValue", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // find characteristic
                     ChrFound found = locateCharacteristic(gatt, serviceUuid, secondaryServiceUuid, characteristicUuid);
@@ -1026,6 +1051,9 @@ public class FlutterBluePlusPlugin implements
                         break;
                     }
 
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
+
                     // request mtu
                     if(gatt.requestMtu(mtu) == false) {
                         result.error("requestMtu", "gatt.requestMtu() returned false", null);
@@ -1046,6 +1074,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("readRssi", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // read rssi
                     if(gatt.readRemoteRssi() == false) {
@@ -1070,6 +1101,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("requestConnectionPriority", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     int cpInteger = bmConnectionPriorityParse(connectionPriority);
 
@@ -1123,6 +1157,9 @@ public class FlutterBluePlusPlugin implements
                         result.error("setPreferredPhy", "device is disconnected", null);
                         break;
                     }
+
+                    // wait if any device is bonding (increases reliability)
+                    waitIfBonding();
 
                     // set preferred phy
                     gatt.setPreferredPhy(txPhy, rxPhy, phyOptions);
@@ -1181,6 +1218,13 @@ public class FlutterBluePlusPlugin implements
                     if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                         log(LogLevel.WARNING, "already bonded");
                         result.success(false); // no work to do
+                        break;
+                    }
+
+                    // bonding already in progress?
+                    if (device.getBondState() == BluetoothDevice.BOND_BONDING) {
+                        log(LogLevel.WARNING, "bonding already in progress");
+                        result.success(true); // caller must wait for bond completion
                         break;
                     }
 
@@ -1340,6 +1384,20 @@ public class FlutterBluePlusPlugin implements
     // ██    ██     ██     ██  ██            ██
     //  ██████      ██     ██  ███████  ███████
 
+    private void waitIfBonding() {
+        int counter = 0;
+        if (mBondingDevices.isEmpty() == false) {
+            if (counter == 0) {
+                log(LogLevel.DEBUG, "[FBP] waiting for bonding to complete...");
+            }
+            try{Thread.sleep(50);}catch(Exception e){}
+            counter++;
+        }
+        if (counter > 0) {
+            log(LogLevel.DEBUG, "[FBP] bonding completed");
+        }
+    }
+
     class ChrFound {
         public BluetoothGattCharacteristic characteristic;
         public String error;
@@ -1479,6 +1537,7 @@ public class FlutterBluePlusPlugin implements
 
         mConnectedDevices.clear();
         mCurrentlyConnectingDevices.clear();
+        mBondingDevices.clear();
         mMtu.clear();
         mWriteChr.clear();
         mWriteDesc.clear();
@@ -1568,6 +1627,13 @@ public class FlutterBluePlusPlugin implements
             log(LogLevel.DEBUG, "OnBondStateChanged: " + bondStateString(cur) + " prev: " + bondStateString(prev));
 
             String remoteId = device.getAddress();
+
+            // remember which devices are currently bonding
+            if (cur == BluetoothDevice.BOND_BONDING) {
+                mBondingDevices.put(remoteId, device);
+            } else {
+                mBondingDevices.remove(remoteId);
+            }
 
             // see: BmBondStateResponse
             HashMap<String, Object> map = new HashMap<>();
@@ -1702,6 +1768,9 @@ public class FlutterBluePlusPlugin implements
 
                 // remove from currently connecting devices
                 mCurrentlyConnectingDevices.remove(remoteId);
+
+                // remove from currently bonding devices
+                mBondingDevices.remove(remoteId);
 
                 // we cannot call 'close' for autoconnect
                 // because it prevents autoconnect from working
